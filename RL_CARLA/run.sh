@@ -1,0 +1,6 @@
+# python benchmark_agent.py --suite=town2 --max-run 100 --path-folder-model model_RL_IAs_only_town01_train_weather/ --crop-sky --emguide --port=3000 --hour 12
+# python test_gen.py --suite=town2 --max-run 100 --path-folder-model model_RL_IAs_only_town01_train_weather/ --crop-sky --emguide --port=3000 --hour 2 --method generative
+python test_gen.py --suite=town2 --max-run 100 --path-folder-model model_RL_IAs_only_town01_train_weather/ --crop-sky --emguide --port=3000 --hour 2 --method generative+density 
+python test_gen.py --suite=town2 --max-run 100 --path-folder-model model_RL_IAs_only_town01_train_weather/ --crop-sky --emguide --port=3000 --hour 2 --method generative+sensitivity
+python test_gen.py --suite=town2 --max-run 100 --path-folder-model model_RL_IAs_only_town01_train_weather/ --crop-sky --emguide --port=3000 --hour 2 --method generative+performance
+python test_gen.py --suite=town2 --max-run 100 --path-folder-model model_RL_IAs_only_town01_train_weather/ --crop-sky --emguide --port=3000 --hour 2 --method generative+novelty 
