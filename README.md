@@ -31,6 +31,18 @@
   * Data will be automatically saved into ./results
 
 ## 5 Citing and Thanks 
+  * We have used the Stable Baselines rl-agents-zoo.
+  ```latex
+  @misc{stable-baselines,
+  author = {Hill, Ashley and Raffin, Antonin and Ernestus, Maximilian and Gleave, Adam and Kanervisto, Anssi and Traore, Rene and Dhariwal, Prafulla and Hesse,         
+  Christopher and Klimov, Oleg and Nichol, Alex and Plappert, Matthias and Radford, Alec and Schulman, John and Sidor, Szymon and Wu, Yuhuai},
+  title = {Stable Baselines},
+  year = {2018},
+  publisher = {GitHub},
+  journal = {GitHub repository},
+  howpublished = {\url{https://github.com/hill-a/stable-baselines}},
+  }
+  ```
 
   * Our program is highly depending on MDPFuzz, thanks to the efforts by the developers. Please kindly cite the paper if you referenced our repo.
 
