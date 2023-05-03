@@ -82,7 +82,7 @@ if __name__ == '__main__':
     parser.add_argument("--method", help="select the guidance for testing", default="generative", type=str, required=False)
     parser.add_argument("--hour", help="test time", default=12, type=int)
     parser.add_argument("--step", help="number of normal cases at each training step", default=50, type=int)
-    parser.add_argument("--grid", help="state abstraction granularity", default=2, type=int)
+    parser.add_argument("--grid", help="state abstraction granularity", default=5, type=int)
 
 
     args = parser.parse_args()

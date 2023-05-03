@@ -14,6 +14,8 @@ import tensorflow.contrib.layers as layers
 from fuzz.fuzz import fuzzing
 import tqdm, sys
 import os,json, random
+from interfaces import normalize_data, Memory, Density, compute_sensitivity, case_clip, compute_novelty, Grid
+
 
 def parse_args():
     parser = argparse.ArgumentParser("Reinforcement Learning experiments for multiagent environments")
@@ -193,7 +195,7 @@ def sample_seeds(seed_num=3000):
     return fuzzer, trainers
 
 def test(arglist):
-    fuzzer, trainers = sample_seeds(30000)
+    fuzzer, trainers = sample_seeds(3000)
     fuzz_failure_list = []
     with U.single_threaded_session():
         env = make_env(arglist.scenario, arglist, arglist.benchmark, fuzz=True)
@@ -201,7 +203,7 @@ def test(arglist):
         U.initialize()
         if arglist.load_dir == "":
             arglist.load_dir = arglist.save_dir
-        U.load_state(arglist.load_dir)
+        U.load_state(arglist.load_dir) 
 
         episode_rewards = 0.0  # sum of rewards for all agents
         start_fuzz_time = time.time()
@@ -224,8 +226,18 @@ def test(arglist):
         episode_step = 0
         train_step = 0
 
+
+        min_obs = np.array([-2 for i in range(24)])
+        max_obs = np.array([ 2 for i in range(24)])
+        novelty_grid = Grid(min_obs, max_obs, arglist.grid)
+        novelty_dict = dict()
+        memory_model = Memory(size = 100)
+        information_list = []
+        fuzz_failure_ids = []
+
         # HACK: set time here
-        while current_fuzz_time - start_fuzz_time < 3600 * arglist.hour:
+        while current_fuzz_time - start_fuzz_time < 3600 * arglist.hour and len(fuzzer.corpus) > 0:
+            failure_flag = False
 
             # if len(fuzzer.corpus) == 0:
             #     del fuzzer, trainers
@@ -245,6 +257,7 @@ def test(arglist):
             for i, rew in enumerate(rew_n):
                 episode_rewards += rew
             if terminal and collisions > 5 and not done:
+                failure_flag = True
                 fuzzer.add_crash(copy.deepcopy(init_state))
                 current_fuzz_time = time.time()
                 regular_time = (current_fuzz_time - start_fuzz_time) / 3600
@@ -279,10 +292,29 @@ def test(arglist):
                 episode_step = 0
                 collisions = 0
                 episode_rewards = 0
+
+            ############################ calculate novelty ################################################
+            abstract_id = novelty_grid.state_abstract(np.array([state_seqs[-1]]))[0]
+            if abstract_id in novelty_dict.keys():
+                novelty_dict[abstract_id] += 1
+            else:
+                novelty_dict[abstract_id] = 1
+            novelty = novelty_dict[abstract_id]
+            if failure_flag:
+                fuzz_failure_ids.append(abstract_id)
+
+            print(state_seqs[-1], failure_flag, abstract_id, novelty_dict[abstract_id], len(set(fuzz_failure_ids)))
+            information_list.append([state_seqs[-1], failure_flag, abstract_id])
     
     os.makedirs('results', exist_ok=True)
     with open('results/fuzz_failure_count.json', 'w') as f:
         json.dump(fuzz_failure_list, f)
+
+    with open('results/mdpfuzz_information.json', 'w') as f:
+        json.dump(information_list, f)
+
+    with open('results/mdpfuzz_novelty_dict.json', 'w') as f:
+        json.dump(novelty_dict, f)
 
 if __name__ == '__main__':
     arglist = parse_args()

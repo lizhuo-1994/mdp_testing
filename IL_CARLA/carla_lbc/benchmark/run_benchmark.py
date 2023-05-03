@@ -12,6 +12,10 @@ import carla
 from carla import ColorConverter
 from carla import WeatherParameters
 
+from interfaces import normalize_data, Memory, Density, compute_sensitivity, case_clip, compute_novelty, Grid
+from diffusion import Diffusion
+
+
 def _paint(observations, control, diagnostic, debug, env, show=False):
     import cv2
     import numpy as np
@@ -216,6 +220,7 @@ def run_single(env, weather, start, target, agent_maker, seed, show=False, repla
     else:
         env.replayer = replayer()
         fuzzer = fuzzing()
+        semi_fuzzer = fuzzing()
         env.fuzzer = fuzzer
         agent = agent_maker()
         count_of_GMM = 0
@@ -294,7 +299,7 @@ def run_single(env, weather, start, target, agent_maker, seed, show=False, repla
             first_cvg = env.fuzzer.state_coverage(sequence)
             env.fuzzer.further_mutation((start_pose, env.init_vehicles), rewards=total_reward, entropy=seq_entropy, cvg=first_cvg, original=(start_pose, env.init_vehicles), further_envsetting=[start, target, cu.PRESET_WEATHERS[weather], weather])
             temp_count += 1
-            if temp_count >= 1000:
+            if temp_count >= 100:
                 break
 
         env.first_run = False
@@ -304,10 +309,25 @@ def run_single(env, weather, start, target, agent_maker, seed, show=False, repla
         time_of_fuzzer = 0
         time_of_DynEM = 0
 
-        #######################################################################################
-        trajectory_list = []
-        termination_list = []
+
+        ################################### nvovelty computation ########################################
+        min_obs = np.array([-10, 90, -1, -1, -10, -10, -1, -20, -20, -5, -10, 90, 0, 1, 50, 50, 0])
+        max_obs = np.array([200, 350, 1, 1, 10, 10, 1, 20, 20, 5, 200, 350, 0.5, 4, 300, 300, 15])
+        novelty_grid = Grid(min_obs, max_obs, args.grid)
+        novelty_dict = dict()
+        metric_list = []
+        sensitivity_list = []
+        performance_list = []
+        density_list = []
+        semi_density_list = []
+        novelty_list = []
+        normal_density_list = []
+        normal_novelty_list = []
+        information_list = []
+        fuzz_failure_ids = []
         failure_flag = False
+
+
 
         while len(env.fuzzer.corpus) > 0:
             temp1time = time.time()
@@ -345,6 +365,7 @@ def run_single(env, weather, start, target, agent_maker, seed, show=False, repla
             total_reward = 0
             sequence = []
             while env.tick():
+                
                 observations = env.get_observations()
                 if first_reward_flag == False:
                     cur_invade = (prev_invaded_frame_number != env._invaded_frame_number)
@@ -399,10 +420,15 @@ def run_single(env, weather, start, target, agent_maker, seed, show=False, repla
             temp2time = time.time()
             time_of_env += temp2time - temp1time
             
-            cvg = env.fuzzer.state_coverage(sequence)
+            # cvg = env.fuzzer.state_coverage(sequence)
+            density = fuzzer.state_coverage(sequence)
             time_of_DynEM += time.time() - temp2time
 
+            cvg = fuzzer.state_coverage(sequence)
+
+            failure_flag = False
             if env.is_failure() or env.collided:
+                failure_flag = True
                 env.replayer.store((env.fuzzer.current_pose, env.fuzzer.current_vehicle_info), rewards=total_reward, entropy=seq_entropy, cvg=cvg, original=env.fuzzer.current_original, further_envsetting=env.fuzzer.current_envsetting)
                 env.fuzzer.add_crash(env.fuzzer.current_pose)
                 print('found: ', len(env.fuzzer.result))
@@ -422,31 +448,36 @@ def run_single(env, weather, start, target, agent_maker, seed, show=False, repla
                     env.fuzzer.further_mutation((env.fuzzer.current_pose, env.fuzzer.current_vehicle_info), rewards=total_reward, entropy=seq_entropy, cvg=cvg, original=env.fuzzer.current_original, further_envsetting=env.fuzzer.current_envsetting)
             end_fuzz_time = time.time()
             time_of_fuzzer += end_fuzz_time - temp2time
+          
 
-            print('total reward: ', total_reward, ', coverage: ', cvg, ', passed time: ', end_fuzz_time - start_fuzz_time, ', corpus size: ', len(env.fuzzer.corpus))
+            ############################ calculate novelty ################################################
+            abstract_id = novelty_grid.state_abstract(np.array([sequence[-1]]))[0]
+            if abstract_id in novelty_dict.keys():
+                novelty_dict[abstract_id] += 1
+            else:
+                novelty_dict[abstract_id] = 1
+            novelty = novelty_dict[abstract_id]
+            if failure_flag:
+                fuzz_failure_ids.append(abstract_id)
+
+            print(failure_flag, abstract_id, novelty_dict[abstract_id], len(set(fuzz_failure_ids)))
+            information_list.append([sequence[-1].tolist(), failure_flag, abstract_id])
+
+            # print('total reward: ', total_reward, ', coverage: ', cvg, ', passed time: ', end_fuzz_time - start_fuzz_time, ', corpus size: ', len(env.fuzzer.corpus))
             if end_fuzz_time - start_fuzz_time > 3600 * args.hour:
-                break
-
-            trajectory_list.append(sequence)
-            termination_list.append(sequence[-1])
-
-            if len(trajectory_list) > 500:
-                break
-
-
-        trajectory_list = np.array(trajectory_list)
-        termination_list = np.array(termination_list)
-        os.makedirs('results', exist_ok=True)
-        np.save('results/MDPFuzz+trajectory.npy', trajectory_list)
-        np.save('results/MDPFuzz+termination.npy', termination_list)        
+                break    
     
     print('Total time: ', end_fuzz_time - start_fuzz_time)
     print('Env time: ', time_of_env)
     print('Fuzzer time: ', time_of_fuzzer)
     print('DynEM time: ', time_of_DynEM)
-    os.makedirs('carla_lbc/results', exist_ok=True)
-    with open('carla_lbc/results/fuzz_failure_count.json', 'w') as f:
+    os.makedirs('./IL_CARLA/carla_lbc/results', exist_ok=True)
+    with open('./IL_CARLA/carla_lbc/results/fuzz_failure_count.json', 'w') as f:
         json.dump(fuzz_failure_list, f)
+    with open('./IL_CARLA/carla_lbc/results/' + args.method + '_information.json', 'w') as f:
+        json.dump(information_list, f)
+    with open('./IL_CARLA/carla_lbc/results/' + args.method + '_novelty_dict.json', 'w') as f:
+        json.dump(novelty_dict, f)
 
     return result, diagnostics
 

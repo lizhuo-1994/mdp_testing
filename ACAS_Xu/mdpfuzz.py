@@ -10,6 +10,8 @@ import torch, time, pickle, copy, argparse, sys, tqdm
 from fuzz.fuzz import fuzzing
 import os, random, json
 
+from interfaces import normalize_data, Memory, Density, compute_sensitivity, case_clip, compute_novelty, Grid
+
 class ACASagent:
     def __init__(self, acas_speed):
         self.x = 0
@@ -350,8 +352,16 @@ def fuzz_testing(fuzzer, args):
     pbar = tqdm.tqdm(total=3600 * args.terminate)
 
 
+    min_obs = np.array([-1 for i in range(5)])
+    max_obs = np.array([1 for i in range(5)])
+    novelty_grid = Grid(min_obs, max_obs, args.grid)
+    novelty_dict = dict()
+    memory_model = Memory(size = 100)
     fuzz_failure_list = []
+    information_list = []
+    fuzz_failure_ids = []
     while len(fuzzer.corpus) > 0:
+        failure_flag = False
         temp1 = time.time()
         orig_pose = fuzzer.get_pose()
         [orig_acas_speed, orig_x2, orig_y2, orig_auto_theta] = orig_pose
@@ -378,6 +388,7 @@ def fuzz_testing(fuzzer, args):
         time_of_fuzzer += temp4 - temp3
 
         if collide_flag:
+            failure_flag = True
             fuzzer.add_crash([acas_speed, x2, y2, auto_theta])
             current_fuzz_time = time.time()
             regular_time = (current_fuzz_time - start_fuzz_time) / 3600
@@ -393,18 +404,32 @@ def fuzz_testing(fuzzer, args):
         end_fuzz_time = time.time()
         # print('total reward: ', reward, ', coverage: ', cvg, ', passed time: ', end_fuzz_time - start_fuzz_time, ', corpus size: ', len(fuzzer.corpus))
         time_of_fuzzer += end_fuzz_time - temp4
-        pbar.update((time.time() - temp1))
-        pbar.set_postfix({'Found': len(fuzzer.result), 'Pool': len(fuzzer.corpus)})
         if end_fuzz_time - start_fuzz_time > args.terminate * 3600:
             break
 
-        # FIXME: comment out here
-        # if len(fuzzer.result) > 0:
-        #     break
+        ############################ calculate novelty ################################################
+        abstract_id = novelty_grid.state_abstract(np.array([states_seq[-1]]))[0]
+        if abstract_id in novelty_dict.keys():
+            novelty_dict[abstract_id] += 1
+        else:
+            novelty_dict[abstract_id] = 1
+        novelty = novelty_dict[abstract_id]
+        if failure_flag:
+            fuzz_failure_ids.append(abstract_id)
+
+        print(states_seq[-1], failure_flag, abstract_id, novelty_dict[abstract_id], len(set(fuzz_failure_ids)))
+        information_list.append([states_seq[-1], failure_flag, abstract_id])
 
     os.makedirs('results', exist_ok=True)
     with open('results/fuzz_failure_count.json', 'w') as f:
         json.dump(fuzz_failure_list, f)
+    
+    with open('results/mdpfuzz_information.json', 'w') as f:
+        json.dump(information_list, f)
+
+    with open('results/mdpfuzz_novelty_dict.json', 'w') as f:
+        json.dump(novelty_dict, f)
+
 
 def replay(pickle_path):
     with open(pickle_path, 'rb') as handle:
@@ -596,6 +621,7 @@ if __name__ == '__main__':
     parser.add_argument("--terminate", type=float, default=1.0)
     parser.add_argument("--seed_size", type=float, default=500)
     parser.add_argument("--picklepath", type=str, default='')
+    parser.add_argument("--grid", help="state abstraction granularity", default=5, type=int)
 
     args = parser.parse_args()
 

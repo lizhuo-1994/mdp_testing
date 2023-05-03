@@ -248,13 +248,13 @@ def reward_func(acas_speed, x2, y2, auto_theta):
             collide_flag = True
             reward -= 100
 
-    return reward, collide_flag, states_seq
+    return reward, collide_flag, states_seq 
 
 
 def testing(args):
 
     case_dimension = 4
-    diffusion_model = Diffusion(batch_size = 1, epoch = 10, data_size = case_dimension, training_step_per_spoch = 50, num_diffusion_step = 25)
+    diffusion_model = Diffusion(batch_size = 1, epoch = 1, data_size = case_dimension, training_step_per_spoch = 25, num_diffusion_step = 25)
     diffusion_model.setup()
     memory_model = Memory(size = 100)
     density_model = Density()
@@ -278,6 +278,9 @@ def testing(args):
     current_time = time.time()
     cur_step = 0
     failure_by_diffusion = 0
+
+    information_list = []
+    diffusion_failure_clusters = []
 
     while current_time - start_time < 3600 * args.hour:
 
@@ -320,6 +323,30 @@ def testing(args):
                     failure_by_diffusion += 1
                     print('Diffusion Failure case found:', [regular_time, failure_by_diffusion, test_case])
                     diffusion_failure_count.append([regular_time, failure_by_diffusion, test_case])
+            
+                ################################################## compare density and novelty ######################################
+
+                abstract_id = novelty_grid.state_abstract(np.array([states_seq[-1]]))[0]
+                if abstract_id in novelty_dict.keys():
+                    novelty_dict[abstract_id] += 1
+                else:
+                    novelty_dict[abstract_id] = 1
+                novelty = novelty_dict[abstract_id]
+                # norm_novelty = normalize_data(novelty, memory_model.min_novelty, memory_model.max_novelty)
+                # norm_novelty = 1 - norm_novelty
+                # norm_novelty = novelty
+                norm_novelty = 1 / (math.e ** (novelty - 1))
+
+                ############################################# add to training #######################################################3
+                normal_case_list.append(test_case)
+                metric_list.append([0, 0, 0, norm_novelty])
+                memory_model.append(test_case, 0, 0, 0, novelty)
+
+                if collide_flag:
+                    diffusion_failure_clusters.append(abstract_id)
+
+                print(collide_flag, abstract_id, len(novelty_dict.keys()), len(set(diffusion_failure_clusters)))
+                information_list.append([states_seq[-1], collide_flag, abstract_id, norm_novelty])
 
         else:
 
@@ -332,45 +359,58 @@ def testing(args):
                 continue
 
             reward, collide_flag, sequence = reward_func(acas_speed, x2, y2, auto_theta)
-            if collide_flag:
-                print('random detected!!!!!!!!!!!!!!!!')
 
             ########################## Density, Sensitivity and other guidance ############################
-            cases_list = memory_model.get_cases()
-            density_list = memory_model.get_densities()
-            sensitivity_list = memory_model.get_sensitivities()
-            performance_list = memory_model.get_performances()
-
-            density = density_model.state_coverage(sequence)
-            sensitivity = compute_sensitivity(normal_case, cases_list, performance_list, reward)
-            performance = reward
-
-            abstract_id = novelty_grid.state_abstract(np.array([sequence[-1]]))[0]
-
-            if abstract_id in novelty_dict.keys():
-                novelty_dict[abstract_id] += 1
-            else:
-                novelty_dict[abstract_id] = 1
-            novelty = novelty_dict[abstract_id]
-
-            norm_density = normalize_data(density, memory_model.min_density, memory_model.max_density)
-            norm_sensitivity = normalize_data(sensitivity, memory_model.min_sensitivity, memory_model.max_sensitivity)
-            norm_performance = normalize_data(performance, memory_model.min_performance, memory_model.max_performance)
-            norm_novelty = normalize_data(novelty, memory_model.min_novelty, memory_model.max_novelty)
-
-            # a larger sensitivity or novelty is the better
-            norm_sensitivity = 1 - norm_sensitivity
-            norm_novelty     = 1 - norm_novelty
-
-
             normal_case_list.append(normal_case)
+            density, norm_density = 0, 0
+            sensitivity, norm_sensitivity = 0, 0
+            performance, norm_performance = 0, 0
+            novelty, norm_novelty = 0, 0
+            cases_list = memory_model.get_cases()
+
+            if 'density' in args.method:
+                density_list = memory_model.get_densities()
+                density = density_model.state_coverage(sequence)
+                norm_density = normalize_data(density, memory_model.min_density, memory_model.max_density)
+            
+            if 'sensitivity' in args.method:
+                sensitivity_list = memory_model.get_sensitivities()
+                sensitivity = compute_sensitivity(normal_case, cases_list, performance_list, episode_reward)
+                norm_sensitivity = normalize_data(sensitivity, memory_model.min_sensitivity, memory_model.max_sensitivity)
+                norm_sensitivity = 1 - norm_sensitivity
+                metric = norm_sensitivity
+            
+            if 'performance' in args.method:
+                performance_list = memory_model.get_performances()
+                performance = episode_reward
+                norm_performance = normalize_data(performance, memory_model.min_performance, memory_model.max_performance)
+            
+            if 'novelty' in  args.method:
+                abstract_id = novelty_grid.state_abstract(np.array([sequence[-1]]))[0]
+                if abstract_id in novelty_dict.keys():
+                    novelty_dict[abstract_id] += 1
+                else:
+                    novelty_dict[abstract_id] = 1
+                novelty = novelty_dict[abstract_id]
+                # norm_novelty = normalize_data(novelty, memory_model.min_novelty, memory_model.max_novelty)
+                # norm_novelty = 1 - norm_novelty
+                # norm_novelty = novelty
+                norm_novelty = 1 / (math.e ** (novelty - 1))
+
             metric_list.append([norm_density, norm_sensitivity, norm_performance, norm_novelty])
             memory_model.append(normal_case, density, sensitivity, performance, novelty)
+
         cur_step += 1
 
     os.makedirs('results', exist_ok=True)
     with open('results/' + args.method + '_diffusion_failure_count.json', 'w') as f:
         json.dump(diffusion_failure_count, f)
+
+    with open('results/' + args.method + '_information.json', 'w') as f:
+        json.dump(information_list, f)
+
+    with open('results/' + args.method + '_novelty_dict.json', 'w') as f:
+        json.dump(novelty_dict, f)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -385,8 +425,8 @@ if __name__ == '__main__':
     ######################## parameters for generative testing ############################################
     parser.add_argument("--method", help="select the guidance for testing", default="generative", type=str, required=False)
     parser.add_argument("--hour", help="test time", default=1, type=int)
-    parser.add_argument("--step", help="number of normal cases at each training step", default=100, type=int)
-    parser.add_argument("--grid", help="state abstraction granularity", default=10, type=int)
+    parser.add_argument("--step", help="number of normal cases at each training step", default=50, type=int)
+    parser.add_argument("--grid", help="state abstraction granularity", default=5, type=int)
 
     args = parser.parse_args()
 

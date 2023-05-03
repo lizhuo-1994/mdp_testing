@@ -35,9 +35,6 @@ class DummyVecEnv(VecEnv):
         self.actions = None
         self.metadata = env.metadata
 
-        ###################### add for mepfuzz ##################
-        self.init_states = []
-
     def step_async(self, actions: np.ndarray) -> None:
         self.actions = actions
 
@@ -60,10 +57,6 @@ class DummyVecEnv(VecEnv):
         return seeds
 
     def reset(self, states: np.ndarray) -> VecEnvObs:
-
-        #################### reset the detected failures here #####################################
-        states = random.choice(self.init_states)
-
         for env_idx in range(self.num_envs):
             # print(self.envs[env_idx].reset)
             obs = self.envs[env_idx].reset(states)

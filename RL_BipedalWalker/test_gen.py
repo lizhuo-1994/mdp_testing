@@ -7,7 +7,7 @@ import utils.import_envs
 from utils import ALGOS, create_test_env, get_latest_run_id, get_saved_hyperparams
 from utils.exp_manager import ExperimentManager
 from utils.utils import StoreDict
-import json, random, pickle
+import json, random, pickle, math
 
 
 from interfaces import normalize_data, Memory, Density, compute_sensitivity, case_clip, compute_novelty, Grid
@@ -59,7 +59,7 @@ def main():
     parser.add_argument("--method", help="select the guidance for testing", default="generative", type=str, required=False)
     parser.add_argument("--hour", help="test time", default=12, type=int)
     parser.add_argument("--step", help="number of normal cases at each training step", default=50, type=int)
-    parser.add_argument("--grid", help="state abstraction granularity", default=2, type=int)
+    parser.add_argument("--grid", help="state abstraction granularity", default=5, type=int)
     args = parser.parse_args()
 
     # Going through custom gym packages to let them register in the global registory
@@ -158,7 +158,7 @@ def main():
     ##################################################################################################
 
     case_dimension = 15
-    diffusion_model = Diffusion(batch_size = 1, epoch = 100, data_size = case_dimension, training_step_per_spoch = 50, num_diffusion_step = 50)
+    diffusion_model = Diffusion(batch_size = 1, epoch = 100, data_size = case_dimension, training_step_per_spoch = 25, num_diffusion_step = 25)
     diffusion_model.setup()
     memory_model = Memory(size = 100)
     density_model = Density()
@@ -168,7 +168,9 @@ def main():
     min_obs = np.array([-5 for i in range(env.observation_space.shape[0])])
     max_obs = np.array([5 for i in range(env.observation_space.shape[0])])
     novelty_grid = Grid(min_obs, max_obs, args.grid)
+    novelty_test_grid = Grid(min_obs, max_obs, args.grid)
     novelty_dict = dict()
+    novelty_test_dict = dict()
 
 
 
@@ -184,7 +186,7 @@ def main():
     ep_len = 0
 
     total_step = 100000
-    val_step = 100
+    val_step = 50
     cur_step = 0
     wins = 0
     lose = 0
@@ -200,6 +202,7 @@ def main():
     performance_list = []
     novelty_list = []
     diffusion_failure_list = []
+    diffusion_failure_clusters = []
     random_failure_list = []
     diffusion_failure_count = []
     random_failure_count = []
@@ -209,6 +212,7 @@ def main():
     #######################################################################################
     trajectory_list = []
     termination_list = []
+    information_list = []
     failure_flag = False
 
     while current_time - start_time < 3600 * args.hour:
@@ -238,13 +242,13 @@ def main():
             diffusion_model.train(normal_case_list, metrics, args.method)
             normal_case_list = []
             metric_list = []
-            terminate_list = []
+            
             memory_model.clear()
 
             for _ in range(val_step):
                 failure_flag = False
-                seed = random.randint(1,1000)
-                env.seed(seed)
+                # seed = random.randint(1,1000)
+                # env.seed(seed)
                 state = None
                 test_case = diffusion_model.generate()
                 obs = env.reset(test_case)
@@ -259,11 +263,11 @@ def main():
                     if done:
                         break
                 if done or episode_reward < 10:
-                    failure_flag = True
                     save_case = test_case.tolist()
                     if save_case in random_failure_list or save_case in diffusion_failure_list:
                         pass
                     else:
+                        failure_flag = True
                         lose += 1
                         done = False
                         regular_time = (current_time - start_time) / 3600
@@ -272,18 +276,34 @@ def main():
                         print(regular_time, failure_by_diffusion, save_case)
                         diffusion_failure_count.append([regular_time, failure_by_diffusion, save_case])
                 else:
-                    wins += 1
+                    wins += 1  
 
-                trajectory_list.append(sequences)
-                termination_list.append(sequences[-1])
+                ################################################## compare density and novelty ######################################
 
+                abstract_id = novelty_grid.state_abstract(np.array([sequences[-1]]))[0]
+                if abstract_id in novelty_test_dict.keys():
+                    novelty_dict[abstract_id] += 1
+                else:
+                    novelty_dict[abstract_id] = 1
+                novelty = novelty_dict[abstract_id]
+                # norm_novelty = normalize_data(novelty, memory_model.min_novelty, memory_model.max_novelty)
+                # norm_novelty = 1 - norm_novelty
+                # norm_novelty = novelty
+                norm_novelty = 1 / (math.e ** (novelty - 1))
 
+                ############################################# add to training #######################################################3
+                normal_case_list.append(test_case)
+                metric_list.append([0, 0, 0, norm_novelty])
+                memory_model.append(test_case, 0, 0, 0, novelty)
 
-                
-                    
+                if failure_flag:
+                    diffusion_failure_clusters.append(abstract_id)
+
+                print(failure_flag, abstract_id, len(novelty_dict.keys()), len(set(diffusion_failure_clusters)))
+                information_list.append([sequences[-1].tolist(), failure_flag, abstract_id, norm_novelty])
         else:
-            seed = np.random.randint(1,1000)
-            env.seed(seed)
+            # seed = np.random.randint(1,1000)
+            # env.seed(seed)
             state = None
             normal_case = np.random.randint(low=1, high=4, size=15)
             
@@ -298,54 +318,62 @@ def main():
                 episode_reward += reward[0]
                 if done:
                     break
-                
+
             ########################## Density, Sensitivity and other guidance ############################
-            cases_list = memory_model.get_cases()
-            density_list = memory_model.get_densities()
-            sensitivity_list = memory_model.get_sensitivities()
-            performance_list = memory_model.get_performances()
-
-            density = density_model.state_coverage(sequences)
-            sensitivity = compute_sensitivity(normal_case, cases_list, performance_list, episode_reward)
-            performance = episode_reward
-
-            ############################ calculate novelty ################################################
-            abstract_id = novelty_grid.state_abstract(np.array([sequences[-1]]))[0]
-            if abstract_id in novelty_dict.keys():
-                novelty_dict[abstract_id] += 1
-            else:
-                novelty_dict[abstract_id] = 1
-            novelty = novelty_dict[abstract_id]
-
-            norm_density = normalize_data(density, memory_model.min_density, memory_model.max_density)
-            norm_sensitivity = normalize_data(sensitivity, memory_model.min_sensitivity, memory_model.max_sensitivity)
-            norm_performance = normalize_data(performance, memory_model.min_performance, memory_model.max_performance)
-            norm_novelty = normalize_data(novelty, memory_model.min_novelty, memory_model.max_novelty)
-
-
-            # print('density: ', density, '\t norm_density:\t ', norm_density)
-            # print('sensitivity: ', sensitivity, '\t norm_sensitivity:\t ', norm_sensitivity)
-            # print('performance: ', performance, '\t norm_performance:\t ', norm_performance)
-
-            # a larger sensitivity or novelty is the better
-            norm_sensitivity = 1 - norm_sensitivity
-            norm_novelty     = 1 - norm_novelty
-
-
             normal_case_list.append(normal_case)
+            density, norm_density = 0, 0
+            sensitivity, norm_sensitivity = 0, 0
+            performance, norm_performance = 0, 0
+            novelty, norm_novelty = 0, 0
+            cases_list = memory_model.get_cases()
+
+            if 'density' in args.method:
+                density_list = memory_model.get_densities()
+                density = density_model.state_coverage(sequences)
+                norm_density = normalize_data(density, memory_model.min_density, memory_model.max_density)
+            
+            if 'sensitivity' in args.method:
+                sensitivity_list = memory_model.get_sensitivities()
+                sensitivity = compute_sensitivity(normal_case, cases_list, performance_list, episode_reward)
+                norm_sensitivity = normalize_data(sensitivity, memory_model.min_sensitivity, memory_model.max_sensitivity)
+                norm_sensitivity = 1 - norm_sensitivity
+                metric = norm_sensitivity
+            
+            if 'performance' in args.method:
+                performance_list = memory_model.get_performances()
+                performance = episode_reward
+                norm_performance = normalize_data(performance, memory_model.min_performance, memory_model.max_performance)
+            
+            if 'novelty' in  args.method:
+                abstract_id = novelty_grid.state_abstract(np.array([sequences[-1]]))[0]
+                if abstract_id in novelty_dict.keys():
+                    novelty_dict[abstract_id] += 1
+                else:
+                    novelty_dict[abstract_id] = 1
+                novelty = novelty_dict[abstract_id]
+                # norm_novelty = normalize_data(novelty, memory_model.min_novelty, memory_model.max_novelty)
+                # norm_novelty = 1 - norm_novelty
+                # norm_novelty = novelty
+                norm_novelty = 1 / (math.e ** (novelty - 1))
+
             metric_list.append([norm_density, norm_sensitivity, norm_performance, norm_novelty])
             memory_model.append(normal_case, density, sensitivity, performance, novelty)
 
-            print(cur_step, norm_density, norm_sensitivity, norm_performance, norm_novelty)
+            print(cur_step, normal_case)
 
         cur_step += 1
         current_time = time.time()
     
     os.makedirs('results', exist_ok=True)
-    with open('results/' + args.method + '_diffusion_failure_count.json', 'w') as f:
+    with open('results/' + args.method + '_'+ str(args.step) + '_diffusion_failure_count.json', 'w') as f:
         json.dump(diffusion_failure_count, f)
 
+    with open('results/' + args.method + '_information.json', 'w') as f:
+        json.dump(information_list, f)
 
+    with open('results/' + args.method + '_novelty_dict.json', 'w') as f:
+        json.dump(novelty_dict, f)
+        
 
 
 if __name__ == '__main__':  

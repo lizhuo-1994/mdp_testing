@@ -1,4 +1,4 @@
-import argparse, importlib, os, sys, time, copy, tqdm, pickle, gym, yaml
+import argparse, importlib, os, sys, time, copy, tqdm, pickle, gym, yaml, random
 import numpy as np
 import torch as th
 from stable_baselines3.common.utils import set_random_seed
@@ -330,19 +330,19 @@ def main():
                 fuzzer.further_mutation(current_pose, episode_reward, local_sensitivity, cvg, orig_pose)
         current_time = time.time()
         time_of_fuzzer += current_time - temp2_time
+
+
+        
         print('total reward: ', episode_reward, ', coverage: ', cvg, ', passed time: ', current_time - start_fuzz_time, ', corpus size: ', len(fuzzer.corpus), 'time_of_fuzzer: ', time_of_fuzzer, 'time_of_env: ', time_of_env)
 
 
-        trajectory_list.append(sequences)
-        termination_list.append(sequences[-1])
-        if len(trajectory_list) > 500:
-            break
+        
+
     
     trajectory_list = np.array(trajectory_list)
     termination_list = np.array(termination_list)
     os.makedirs('results', exist_ok=True)
-    np.save('results/MDPFuzz+trajectory.npy', trajectory_list)
-    np.save('results/MDPFuzz+termination.npy', termination_list)    
+
 
     # if args.em:
     #     file_name = './results/crash_EM.pkl'

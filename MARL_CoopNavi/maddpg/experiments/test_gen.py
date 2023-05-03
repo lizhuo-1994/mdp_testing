@@ -142,7 +142,7 @@ def test(arglist):
 
 
         case_dimension = 12
-        diffusion_model = Diffusion(batch_size = 1, epoch = 25, data_size = case_dimension, training_step_per_spoch = 25, num_diffusion_step = 25)
+        diffusion_model = Diffusion(batch_size = 1, epoch = 1, data_size = case_dimension, training_step_per_spoch = 25, num_diffusion_step = 25)
         diffusion_model.setup()
         memory_model = Memory(size = 100)
         density_model = Density()
@@ -166,6 +166,9 @@ def test(arglist):
         current_time = time.time()
         cur_step = 0
         failure_by_diffusion = 0
+
+        information_list = []
+        diffusion_failure_clusters= []
 
         # HACK: set time here
         while current_time - start_time < 3600 * arglist.hour:
@@ -195,7 +198,8 @@ def test(arglist):
                 metric_list = []
                 memory_model.clear() 
 
-                for _ in range(100):
+                for _ in range(50):
+                    failure_flag = False
                     test_case = diffusion_model.generate()
                     test_case = list(test_case.reshape(6,2))
                     obs_n = env.reset(test_case[0:3], test_case[3:]) 
@@ -225,6 +229,7 @@ def test(arglist):
                         for i, rew in enumerate(rew_n):
                             episode_rewards += rew
                         if terminal and collisions > 5 and not done:
+                            failure_flag = True
                             current_time = time.time()
                             regular_time = (current_time - start_time) / 3600
                             failure_by_diffusion += 1
@@ -233,6 +238,30 @@ def test(arglist):
                             break
                         if terminal or done:
                             break
+                    
+                    ################################################## compare density and novelty ######################################
+
+                    abstract_id = novelty_grid.state_abstract(np.array([sequence[-1]]))[0]
+                    if abstract_id in novelty_dict.keys():
+                        novelty_dict[abstract_id] += 1
+                    else:
+                        novelty_dict[abstract_id] = 1
+                    novelty = novelty_dict[abstract_id]
+                    # norm_novelty = normalize_data(novelty, memory_model.min_novelty, memory_model.max_novelty)
+                    # norm_novelty = 1 - norm_novelty
+                    # norm_novelty = novelty
+                    norm_novelty = 1 / (math.e ** (novelty - 1))
+
+                    ############################################# add to training #######################################################3
+                    normal_case_list.append(test_case)
+                    metric_list.append([0, 0, 0, norm_novelty])
+                    memory_model.append(test_case, 0, 0, 0, novelty)
+
+                    if failure_flag:
+                        diffusion_failure_clusters.append(abstract_id)
+
+                    print(failure_flag, abstract_id, len(novelty_dict.keys()), len(set(diffusion_failure_clusters)))
+                    information_list.append([sequence[-1], failure_flag, abstract_id, norm_novelty])
             else:
                 normal_case = np.random.uniform(-1,1,12)
                 normal_case = list(normal_case.reshape(6,2))
@@ -260,50 +289,60 @@ def test(arglist):
                     for i, rew in enumerate(rew_n):
                         episode_rewards += rew
 
-                    if terminal and collisions > 5 and not done:
-                        print('random detected!!!!!!!!!!!!!!!!')
                     if terminal or done:
                         break
 
-                    
-                
+
                 ########################## Density, Sensitivity and other guidance ############################
-                cases_list = memory_model.get_cases()
-                density_list = memory_model.get_densities()
-                sensitivity_list = memory_model.get_sensitivities()
-                performance_list = memory_model.get_performances()
-
-                density = density_model.state_coverage(sequence)
-                sensitivity = compute_sensitivity(normal_case, cases_list, performance_list, episode_rewards)
-                performance = episode_rewards
-
-                abstract_id = novelty_grid.state_abstract(np.array([sequence[-1]]))[0]
-
-                if abstract_id in novelty_dict.keys():
-                    novelty_dict[abstract_id] += 1
-                else:
-                    novelty_dict[abstract_id] = 1
-                novelty = novelty_dict[abstract_id]
-
-                norm_density = normalize_data(density, memory_model.min_density, memory_model.max_density)
-                norm_sensitivity = normalize_data(sensitivity, memory_model.min_sensitivity, memory_model.max_sensitivity)
-                norm_performance = normalize_data(performance, memory_model.min_performance, memory_model.max_performance)
-                norm_novelty = normalize_data(novelty, memory_model.min_novelty, memory_model.max_novelty)
-
-                # a larger sensitivity or novelty is the better
-                norm_sensitivity = 1 - norm_sensitivity
-                norm_novelty     = 1 - norm_novelty
-
-
                 normal_case_list.append(normal_case)
+                density, norm_density = 0, 0
+                sensitivity, norm_sensitivity = 0, 0
+                performance, norm_performance = 0, 0
+                novelty, norm_novelty = 0, 0
+                cases_list = memory_model.get_cases()
+
+                if 'density' in arglist.method:
+                    density_list = memory_model.get_densities()
+                    density = density_model.state_coverage(sequence)
+                    norm_density = normalize_data(density, memory_model.min_density, memory_model.max_density)
+                
+                if 'sensitivity' in arglist.method:
+                    sensitivity_list = memory_model.get_sensitivities()
+                    sensitivity = compute_sensitivity(normal_case, cases_list, performance_list, episode_reward)
+                    norm_sensitivity = normalize_data(sensitivity, memory_model.min_sensitivity, memory_model.max_sensitivity)
+                    norm_sensitivity = 1 - norm_sensitivity
+                    metric = norm_sensitivity
+                
+                if 'performance' in arglist.method:
+                    performance_list = memory_model.get_performances()
+                    performance = episode_reward
+                    norm_performance = normalize_data(performance, memory_model.min_performance, memory_model.max_performance)
+                
+                if 'novelty' in  arglist.method:
+                    abstract_id = novelty_grid.state_abstract(np.array([sequence[-1]]))[0]
+                    if abstract_id in novelty_dict.keys():
+                        novelty_dict[abstract_id] += 1
+                    else:
+                        novelty_dict[abstract_id] = 1
+                    novelty = novelty_dict[abstract_id]
+                    # norm_novelty = normalize_data(novelty, memory_model.min_novelty, memory_model.max_novelty)
+                    # norm_novelty = 1 - norm_novelty
+                    # norm_novelty = novelty
+                    norm_novelty = 1 / (math.e ** (novelty - 1))
+
                 metric_list.append([norm_density, norm_sensitivity, norm_performance, norm_novelty])
                 memory_model.append(normal_case, density, sensitivity, performance, novelty)
-            
             cur_step += 1
 
     os.makedirs('results', exist_ok=True)
     with open('results/' + arglist.method + '_diffusion_failure_count.json', 'w') as f:
         json.dump(diffusion_failure_count, f)
+        
+    with open('results/' + arglist.method + '_information.json', 'w') as f:
+        json.dump(information_list, f)
+
+    with open('results/' + arglist.method + '_novelty_dict.json', 'w') as f:
+        json.dump(novelty_dict, f)
 
 if __name__ == '__main__':
     arglist = parse_args()
